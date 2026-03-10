@@ -13,6 +13,7 @@ import { ReportSummary } from '../components/report';
 import { HistoryList } from '../components/history';
 import { TaskPanel } from '../components/tasks';
 import { useTaskStream } from '../hooks';
+import { PortfolioTabs } from '../components/portfolio';
 
 /**
  * 首页 - 单页设计
@@ -286,6 +287,20 @@ const HomePage: React.FC = () => {
   const sidebarContent = (
     <div className="flex flex-col gap-3 overflow-hidden min-h-0 h-full">
       <TaskPanel tasks={activeTasks} />
+      <PortfolioTabs
+        onAnalyze={(code) => {
+          setStockCode(code);
+          setSidebarOpen(false);
+          // Trigger analysis after a short delay to allow state update
+          setTimeout(() => {
+            const { valid, normalized } = validateStockCode(code);
+            if (valid) {
+              setStockCode(normalized);
+              handleAnalyze();
+            }
+          }, 100);
+        }}
+      />
       <HistoryList
         items={historyItems}
         isLoading={isLoadingHistory}

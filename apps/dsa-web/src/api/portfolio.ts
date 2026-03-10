@@ -2,7 +2,7 @@
  * Portfolio API Client - Holdings and watchlist management
  */
 
-import { apiClient } from './client';
+import apiClient from './index';
 
 export interface HoldingItem {
   code: string;
