@@ -66,16 +66,16 @@ _CATEGORY_DEFINITIONS: List[Dict[str, Any]] = [
 _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "STOCK_LIST": {
         "title": "Stock List",
-        "description": "Comma-separated watchlist stock codes.",
+        "description": "Comma-separated watchlist stock codes (supports A-shares, HK stocks, US stocks, ETFs, and funds).",
         "category": "base",
         "data_type": "array",
-        "ui_control": "textarea",
+        "ui_control": "multi-value",
         "is_sensitive": False,
         "is_required": False,
         "is_editable": True,
         "default_value": "600519,300750,002594",
         "options": [],
-        "validation": {"min_items": 1},
+        "validation": {"min_items": 1, "multi_value": True},
         "display_order": 10,
     },
     # ------------------------------------------------------------------

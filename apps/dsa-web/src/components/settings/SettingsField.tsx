@@ -45,6 +45,54 @@ function renderFieldControl(
   const controlType = schema?.uiControl ?? 'text';
   const isMultiValue = isMultiValueField(item);
 
+  // Multi-value control for stock lists and other array fields
+  if (controlType === 'multi-value' || (isMultiValue && controlType !== 'password')) {
+    const values = parseMultiValues(value);
+
+    return (
+      <div className="space-y-2">
+        {values.map((entry, index) => (
+          <div className="flex items-center gap-2" key={`${item.key}-${index}`}>
+            <input
+              type="text"
+              className={`${commonClass} flex-1`}
+              value={entry}
+              disabled={disabled || !schema?.isEditable}
+              placeholder={index === 0 ? "输入股票/基金代码" : ""}
+              onChange={(event) => {
+                const nextValues = [...values];
+                nextValues[index] = event.target.value;
+                onChange(serializeMultiValues(nextValues));
+              }}
+            />
+            <button
+              type="button"
+              className="btn-secondary !px-3 !py-2 text-xs"
+              disabled={disabled || !schema?.isEditable || values.length <= 1}
+              onClick={() => {
+                const nextValues = values.filter((_, rowIndex) => rowIndex !== index);
+                onChange(serializeMultiValues(nextValues.length ? nextValues : ['']));
+              }}
+            >
+              删除
+            </button>
+          </div>
+        ))}
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="btn-secondary !px-3 !py-2 text-xs"
+            disabled={disabled || !schema?.isEditable}
+            onClick={() => onChange(serializeMultiValues([...values, '']))}
+          >
+            添加
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (controlType === 'textarea') {
     return (
       <textarea

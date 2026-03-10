@@ -24,7 +24,8 @@ export type SystemConfigUIControl =
   | 'select'
   | 'textarea'
   | 'switch'
-  | 'time';
+  | 'time'
+  | 'multi-value';
 
 export interface SystemConfigFieldSchema {
   key: string;
