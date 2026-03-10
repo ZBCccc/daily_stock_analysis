@@ -6,6 +6,8 @@ Portfolio API Schemas - Pydantic models for request/response validation
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 
+from data_provider.base import canonical_stock_code
+
 
 class CreateHoldingRequest(BaseModel):
     """Request to create a new holding"""
@@ -16,7 +18,7 @@ class CreateHoldingRequest(BaseModel):
     @field_validator('stock_code')
     @classmethod
     def validate_code(cls, v: str) -> str:
-        return v.strip().upper()
+        return canonical_stock_code(v)
 
 
 class UpdateHoldingRequest(BaseModel):
@@ -59,7 +61,7 @@ class AddWatchlistRequest(BaseModel):
     @field_validator('stock_code')
     @classmethod
     def validate_code(cls, v: str) -> str:
-        return v.strip().upper()
+        return canonical_stock_code(v)
 
 
 class WatchlistItem(BaseModel):

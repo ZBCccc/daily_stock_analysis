@@ -6,6 +6,7 @@ Portfolio Service - Business logic for holdings and watchlist management
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from data_provider import DataFetcherManager, get_asset_type
 from src.storage import get_db, PortfolioHolding, PortfolioWatchlist
@@ -29,6 +30,39 @@ class PortfolioService:
     def __init__(self):
         self.db = get_db()
         self.data_manager = DataFetcherManager()
+
+    def _enrich_with_quote(self, item_dict: Dict[str, Any], code: str, name: Optional[str]) -> None:
+        """
+        Enrich item with real-time quote data
+
+        Updates item_dict in-place with current_price, change_percent, and name if available.
+        """
+        try:
+            quote = self.data_manager.get_realtime_quote(code)
+            if not quote:
+                return
+
+            if hasattr(quote, 'price') and quote.price:
+                item_dict['current_price'] = float(quote.price)
+            if hasattr(quote, 'change_pct') and quote.change_pct is not None:
+                item_dict['change_percent'] = float(quote.change_pct)
+            if hasattr(quote, 'name') and quote.name and not name:
+                item_dict['name'] = quote.name
+        except Exception as e:
+            logger.warning(f"Failed to fetch quote for {code}: {e}")
+
+    def _group_by_asset_type(self, items: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Group items by asset type"""
+        grouped = {'stocks': [], 'funds': [], 'etfs': []}
+        for item in items:
+            asset_type = item['asset_type']
+            if asset_type in ('stock', 'hk_stock', 'us_stock'):
+                grouped['stocks'].append(item)
+            elif asset_type == 'fund':
+                grouped['funds'].append(item)
+            elif asset_type == 'etf':
+                grouped['etfs'].append(item)
+        return grouped
 
     def _resolve_stock_name(self, code: str) -> Optional[str]:
         """
@@ -167,15 +201,15 @@ class PortfolioService:
         """
         holdings = self.db.get_portfolio_holdings(asset_type)
 
-        # Enrich with current prices and calculate P&L
+        # Enrich with current prices and calculate P&L (concurrent fetching)
         enriched_holdings = []
         total_cost = 0.0
         total_market_value = 0.0
 
-        for holding in holdings:
+        def process_holding(holding):
+            """Process a single holding with quote fetching"""
             holding_dict = self._holding_to_dict(holding)
 
-            # Fetch current price
             try:
                 quote = self.data_manager.get_realtime_quote(holding.code)
                 if quote and hasattr(quote, 'price') and quote.price:
@@ -192,21 +226,27 @@ class PortfolioService:
                     holding_dict['unrealized_pnl'] = round(pnl, 2)
                     holding_dict['unrealized_pnl_pct'] = round(pnl_pct, 2)
 
-                    total_cost += cost
-                    total_market_value += market_value
-
                     # Update name if available from quote
                     if hasattr(quote, 'name') and quote.name and not holding.name:
                         holding_dict['name'] = quote.name
+
+                    return holding_dict, cost, market_value
             except Exception as e:
                 logger.warning(f"Failed to fetch price for {holding.code}: {e}")
 
-            enriched_holdings.append(holding_dict)
+            return holding_dict, 0.0, 0.0
 
-        # Group by asset type
-        stocks = [h for h in enriched_holdings if h['asset_type'] in ('stock', 'hk_stock', 'us_stock')]
-        funds = [h for h in enriched_holdings if h['asset_type'] == 'fund']
-        etfs = [h for h in enriched_holdings if h['asset_type'] == 'etf']
+        # Fetch quotes concurrently
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(process_holding, h): h for h in holdings}
+            for future in as_completed(futures):
+                holding_dict, cost, market_value = future.result()
+                enriched_holdings.append(holding_dict)
+                total_cost += cost
+                total_market_value += market_value
+
+        # Group by asset type using helper
+        grouped = self._group_by_asset_type(enriched_holdings)
 
         # Calculate total P&L
         total_pnl = total_market_value - total_cost
@@ -214,9 +254,9 @@ class PortfolioService:
 
         return {
             'total': len(enriched_holdings),
-            'stocks': stocks,
-            'funds': funds,
-            'etfs': etfs,
+            'stocks': grouped['stocks'],
+            'funds': grouped['funds'],
+            'etfs': grouped['etfs'],
             'total_cost': round(total_cost, 2),
             'total_market_value': round(total_market_value, 2),
             'total_pnl': round(total_pnl, 2),
@@ -282,39 +322,29 @@ class PortfolioService:
         """
         items = self.db.get_watchlist_items(asset_type)
 
-        # Enrich with current prices
+        # Enrich with current prices (concurrent fetching)
         enriched_items = []
 
-        for item in items:
+        def process_item(item):
+            """Process a single watchlist item with quote fetching"""
             item_dict = self._watchlist_to_dict(item)
+            self._enrich_with_quote(item_dict, item.code, item.name)
+            return item_dict
 
-            # Fetch current price
-            try:
-                quote = self.data_manager.get_realtime_quote(item.code)
-                if quote:
-                    if hasattr(quote, 'price') and quote.price:
-                        item_dict['current_price'] = float(quote.price)
-                    if hasattr(quote, 'change_pct') and quote.change_pct is not None:
-                        item_dict['change_percent'] = float(quote.change_pct)
+        # Fetch quotes concurrently
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(process_item, item): item for item in items}
+            for future in as_completed(futures):
+                enriched_items.append(future.result())
 
-                    # Update name if available from quote
-                    if hasattr(quote, 'name') and quote.name and not item.name:
-                        item_dict['name'] = quote.name
-            except Exception as e:
-                logger.warning(f"Failed to fetch price for {item.code}: {e}")
-
-            enriched_items.append(item_dict)
-
-        # Group by asset type
-        stocks = [i for i in enriched_items if i['asset_type'] in ('stock', 'hk_stock', 'us_stock')]
-        funds = [i for i in enriched_items if i['asset_type'] == 'fund']
-        etfs = [i for i in enriched_items if i['asset_type'] == 'etf']
+        # Group by asset type using helper
+        grouped = self._group_by_asset_type(enriched_items)
 
         return {
             'total': len(enriched_items),
-            'stocks': stocks,
-            'funds': funds,
-            'etfs': etfs,
+            'stocks': grouped['stocks'],
+            'funds': grouped['funds'],
+            'etfs': grouped['etfs'],
         }
 
     def _holding_to_dict(self, holding: PortfolioHolding) -> Dict[str, Any]:

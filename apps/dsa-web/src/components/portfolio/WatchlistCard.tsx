@@ -1,6 +1,7 @@
 import type React from 'react';
 import type { WatchlistItem } from '../../api/portfolio';
 import { AssetTypeBadge } from './AssetTypeBadge';
+import { formatNumber, formatPercent, getChangeColor } from '../../utils/formatters';
 
 interface WatchlistCardProps {
   item: WatchlistItem;
@@ -13,21 +14,6 @@ export const WatchlistCard: React.FC<WatchlistCardProps> = ({
   onRemove,
   onAnalyze,
 }) => {
-  const formatNumber = (num?: number) => {
-    if (num === undefined || num === null) return 'N/A';
-    return num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
-
-  const formatPercent = (num?: number) => {
-    if (num === undefined || num === null) return 'N/A';
-    const sign = num >= 0 ? '+' : '';
-    return `${sign}${num.toFixed(2)}%`;
-  };
-
-  const changeColor = (change?: number) => {
-    if (!change) return 'text-secondary';
-    return change >= 0 ? 'text-green-400' : 'text-red-400';
-  };
 
   return (
     <div className="glass-card p-4 hover:bg-white/5 transition-colors">
@@ -71,7 +57,7 @@ export const WatchlistCard: React.FC<WatchlistCardProps> = ({
         {item.changePercent !== undefined && (
           <div className="text-right">
             <div className="text-secondary mb-1">涨跌幅</div>
-            <div className={`font-semibold ${changeColor(item.changePercent)}`}>
+            <div className={`font-semibold ${getChangeColor(item.changePercent)}`}>
               {formatPercent(item.changePercent)}
             </div>
           </div>

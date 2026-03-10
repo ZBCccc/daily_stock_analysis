@@ -1,6 +1,7 @@
 import type React from 'react';
 import type { HoldingItem } from '../../api/portfolio';
 import { AssetTypeBadge } from './AssetTypeBadge';
+import { formatNumber, formatPercent, getChangeColor } from '../../utils/formatters';
 
 interface HoldingCardProps {
   holding: HoldingItem;
@@ -15,21 +16,6 @@ export const HoldingCard: React.FC<HoldingCardProps> = ({
   onDelete,
   onAnalyze,
 }) => {
-  const formatNumber = (num?: number) => {
-    if (num === undefined || num === null) return 'N/A';
-    return num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
-
-  const formatPercent = (num?: number) => {
-    if (num === undefined || num === null) return 'N/A';
-    const sign = num >= 0 ? '+' : '';
-    return `${sign}${num.toFixed(2)}%`;
-  };
-
-  const pnlColor = (pnl?: number) => {
-    if (!pnl) return 'text-secondary';
-    return pnl >= 0 ? 'text-green-400' : 'text-red-400';
-  };
 
   return (
     <div className="glass-card p-4 hover:bg-white/5 transition-colors">
@@ -99,10 +85,10 @@ export const HoldingCard: React.FC<HoldingCardProps> = ({
           <div className="flex items-center justify-between">
             <span className="text-sm text-secondary">盈亏</span>
             <div className="text-right">
-              <div className={`font-semibold ${pnlColor(holding.unrealizedPnl)}`}>
+              <div className={`font-semibold ${getChangeColor(holding.unrealizedPnl)}`}>
                 ¥{formatNumber(holding.unrealizedPnl)}
               </div>
-              <div className={`text-sm ${pnlColor(holding.unrealizedPnl)}`}>
+              <div className={`text-sm ${getChangeColor(holding.unrealizedPnl)}`}>
                 {formatPercent(holding.unrealizedPnlPct)}
               </div>
             </div>
