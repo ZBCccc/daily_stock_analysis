@@ -395,6 +395,59 @@ class LLMUsage(Base):
     called_at = Column(DateTime, default=datetime.now, index=True)
 
 
+class PortfolioHolding(Base):
+    """
+    Portfolio holdings table - tracks user's stock/fund positions
+
+    Stores position details including shares and cost basis for P&L calculation
+    """
+    __tablename__ = 'portfolio_holdings'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Asset identification
+    code = Column(String(10), nullable=False, index=True)
+    name = Column(String(50))
+    asset_type = Column(String(16), nullable=False, index=True)  # 'stock', 'fund', 'etf', 'hk_stock', 'us_stock'
+
+    # Position details
+    shares = Column(Float, nullable=False)  # Number of shares/units
+    cost_basis = Column(Float, nullable=False)  # Average cost per share
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint('code', name='uix_portfolio_code'),
+        Index('ix_portfolio_asset_type', 'asset_type'),
+    )
+
+
+class PortfolioWatchlist(Base):
+    """
+    Watchlist table - tracks stocks/funds user wants to monitor
+
+    Lightweight table for tracking codes without position details
+    """
+    __tablename__ = 'portfolio_watchlist'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Asset identification
+    code = Column(String(10), nullable=False, index=True)
+    name = Column(String(50))
+    asset_type = Column(String(16), nullable=False, index=True)  # 'stock', 'fund', 'etf', 'hk_stock', 'us_stock'
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        UniqueConstraint('code', name='uix_watchlist_code'),
+        Index('ix_watchlist_asset_type', 'asset_type'),
+    )
+
+
 class DatabaseManager:
     """
     数据库管理器 - 单例模式
@@ -1565,6 +1618,176 @@ class DatabaseManager:
                 for r in by_model_rows
             ],
         }
+
+    # === Portfolio Management Methods ===
+
+    def create_portfolio_holding(
+        self,
+        code: str,
+        name: Optional[str],
+        asset_type: str,
+        shares: float,
+        cost_basis: float
+    ) -> PortfolioHolding:
+        """
+        Create a new portfolio holding
+
+        Args:
+            code: Stock/fund code
+            name: Stock/fund name
+            asset_type: Asset type (stock/fund/etf/hk_stock/us_stock)
+            shares: Number of shares/units
+            cost_basis: Average cost per share
+
+        Returns:
+            Created PortfolioHolding object
+
+        Raises:
+            IntegrityError: If code already exists in holdings
+        """
+        with self.session_scope() as session:
+            holding = PortfolioHolding(
+                code=code,
+                name=name,
+                asset_type=asset_type,
+                shares=shares,
+                cost_basis=cost_basis
+            )
+            session.add(holding)
+            session.flush()
+            session.refresh(holding)
+            return holding
+
+    def update_portfolio_holding(
+        self,
+        code: str,
+        shares: float,
+        cost_basis: float
+    ) -> Optional[PortfolioHolding]:
+        """
+        Update an existing portfolio holding
+
+        Args:
+            code: Stock/fund code
+            shares: New number of shares/units
+            cost_basis: New average cost per share
+
+        Returns:
+            Updated PortfolioHolding object or None if not found
+        """
+        with self.session_scope() as session:
+            holding = session.query(PortfolioHolding).filter_by(code=code).first()
+            if holding:
+                holding.shares = shares
+                holding.cost_basis = cost_basis
+                holding.updated_at = datetime.now()
+                session.flush()
+                session.refresh(holding)
+                return holding
+            return None
+
+    def delete_portfolio_holding(self, code: str) -> bool:
+        """
+        Delete a portfolio holding
+
+        Args:
+            code: Stock/fund code
+
+        Returns:
+            True if deleted, False if not found
+        """
+        with self.session_scope() as session:
+            result = session.query(PortfolioHolding).filter_by(code=code).delete()
+            return result > 0
+
+    def get_portfolio_holdings(
+        self,
+        asset_type: Optional[str] = None
+    ) -> List[PortfolioHolding]:
+        """
+        Get all portfolio holdings, optionally filtered by asset type
+
+        Args:
+            asset_type: Filter by asset type (stock/fund/etf/hk_stock/us_stock)
+
+        Returns:
+            List of PortfolioHolding objects
+        """
+        with self.session_scope() as session:
+            query = session.query(PortfolioHolding)
+            if asset_type:
+                query = query.filter_by(asset_type=asset_type)
+            holdings = query.order_by(PortfolioHolding.created_at.desc()).all()
+            # Detach from session
+            session.expunge_all()
+            return holdings
+
+    def create_watchlist_item(
+        self,
+        code: str,
+        name: Optional[str],
+        asset_type: str
+    ) -> PortfolioWatchlist:
+        """
+        Add a stock/fund to watchlist
+
+        Args:
+            code: Stock/fund code
+            name: Stock/fund name
+            asset_type: Asset type (stock/fund/etf/hk_stock/us_stock)
+
+        Returns:
+            Created PortfolioWatchlist object
+
+        Raises:
+            IntegrityError: If code already exists in watchlist
+        """
+        with self.session_scope() as session:
+            item = PortfolioWatchlist(
+                code=code,
+                name=name,
+                asset_type=asset_type
+            )
+            session.add(item)
+            session.flush()
+            session.refresh(item)
+            return item
+
+    def delete_watchlist_item(self, code: str) -> bool:
+        """
+        Remove a stock/fund from watchlist
+
+        Args:
+            code: Stock/fund code
+
+        Returns:
+            True if deleted, False if not found
+        """
+        with self.session_scope() as session:
+            result = session.query(PortfolioWatchlist).filter_by(code=code).delete()
+            return result > 0
+
+    def get_watchlist_items(
+        self,
+        asset_type: Optional[str] = None
+    ) -> List[PortfolioWatchlist]:
+        """
+        Get all watchlist items, optionally filtered by asset type
+
+        Args:
+            asset_type: Filter by asset type (stock/fund/etf/hk_stock/us_stock)
+
+        Returns:
+            List of PortfolioWatchlist objects
+        """
+        with self.session_scope() as session:
+            query = session.query(PortfolioWatchlist)
+            if asset_type:
+                query = query.filter_by(asset_type=asset_type)
+            items = query.order_by(PortfolioWatchlist.created_at.desc()).all()
+            # Detach from session
+            session.expunge_all()
+            return items
 
 
 # 便捷函数
