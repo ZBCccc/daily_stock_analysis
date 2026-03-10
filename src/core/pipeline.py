@@ -23,7 +23,7 @@ import pandas as pd
 
 from src.config import get_config, Config
 from src.storage import get_db
-from data_provider import DataFetcherManager
+from data_provider import DataFetcherManager, get_asset_type
 from data_provider.realtime_types import ChipDistribution
 from src.analyzer import GeminiAnalyzer, AnalysisResult
 from src.data.stock_mapping import STOCK_NAME_MAP
@@ -495,6 +495,20 @@ class StockAnalysisPipeline:
         enhanced['is_index_etf'] = SearchService.is_index_or_etf(
             context.get('code', ''), enhanced.get('stock_name', stock_name)
         )
+
+        # Add asset type for fund-specific handling
+        stock_code = context.get('code', '')
+        asset_type = get_asset_type(stock_code)
+        enhanced['asset_type'] = asset_type
+
+        # For funds: remove volume/turnover data (not applicable)
+        if asset_type == 'fund':
+            if 'realtime' in enhanced:
+                enhanced['realtime'].pop('volume_ratio', None)
+                enhanced['realtime'].pop('volume_ratio_desc', None)
+                enhanced['realtime'].pop('turnover_rate', None)
+            # Remove chip distribution for funds (not applicable)
+            enhanced.pop('chip', None)
 
         return enhanced
 

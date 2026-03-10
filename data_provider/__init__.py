@@ -31,7 +31,7 @@
 
 from .base import BaseFetcher, DataFetcherManager
 from .efinance_fetcher import EfinanceFetcher
-from .akshare_fetcher import AkshareFetcher, is_hk_stock_code
+from .akshare_fetcher import AkshareFetcher, is_hk_stock_code, get_asset_type
 from .tushare_fetcher import TushareFetcher
 from .pytdx_fetcher import PytdxFetcher
 from .baostock_fetcher import BaostockFetcher
@@ -50,6 +50,7 @@ __all__ = [
     'is_us_index_code',
     'is_us_stock_code',
     'is_hk_stock_code',
+    'get_asset_type',
     'get_us_index_yf_symbol',
     'US_INDEX_MAPPING',
 ]

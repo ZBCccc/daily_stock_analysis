@@ -90,24 +90,46 @@ _etf_realtime_cache: Dict[str, Any] = {
     'ttl': 1200  # 20分钟缓存有效期
 }
 
+# Fund NAV data cache (for historical data)
+_fund_nav_cache: Dict[str, Any] = {
+    'data': None,
+    'timestamp': 0,
+    'ttl': 3600  # 1 hour cache for fund NAV data
+}
+
 
 def _is_etf_code(stock_code: str) -> bool:
     """
     判断代码是否为 ETF 基金
-    
+
     ETF 代码规则：
     - 上交所 ETF: 51xxxx, 52xxxx, 56xxxx, 58xxxx
-    - 深交所 ETF: 15xxxx, 16xxxx, 18xxxx
-    
+    - 深交所 ETF: 15xxxx, 159xxx (部分16开头的是LOF基金，不是ETF)
+    - 深交所 ETF: 18xxxx
+
     Args:
         stock_code: 股票/基金代码
-        
+
     Returns:
         True 表示是 ETF 代码，False 表示是普通股票代码
     """
-    etf_prefixes = ('51', '52', '56', '58', '15', '16', '18')
     code = stock_code.strip().split('.')[0]
-    return code.startswith(etf_prefixes) and len(code) == 6
+    if len(code) != 6:
+        return False
+
+    # 上交所 ETF
+    if code.startswith(('51', '52', '56', '58')):
+        return True
+
+    # 深交所 ETF (15xxxx, 18xxxx)
+    if code.startswith(('15', '18')):
+        return True
+
+    # 159xxx 是深交所 ETF，但其他 16xxxx 大多是 LOF 基金
+    if code.startswith('159'):
+        return True
+
+    return False
 
 
 def _is_hk_code(stock_code: str) -> bool:
@@ -172,6 +194,104 @@ def _is_us_code(stock_code: str) -> bool:
         False
     """
     return is_us_stock_code(stock_code)
+
+
+# Fund code verification cache
+_fund_code_cache: Dict[str, bool] = {}
+
+
+def _verify_fund_code_with_cache(stock_code: str) -> bool:
+    """
+    Verify if a code is an open-ended fund using akshare API with caching.
+
+    Args:
+        stock_code: 6-digit code to verify
+
+    Returns:
+        True if verified as fund, False otherwise
+    """
+    if stock_code in _fund_code_cache:
+        return _fund_code_cache[stock_code]
+
+    try:
+        import akshare as ak
+        fund_info = ak.fund_open_fund_info_em(fund=stock_code, indicator="单位净值走势")
+        is_fund = fund_info is not None and not fund_info.empty
+        _fund_code_cache[stock_code] = is_fund
+        return is_fund
+    except Exception as e:
+        logger.debug(f"Fund verification failed for {stock_code}: {e}")
+        _fund_code_cache[stock_code] = False
+        return False
+
+
+def _is_open_fund_code(stock_code: str) -> bool:
+    """
+    Detect if a 6-digit code is an open-ended fund (开放式基金).
+
+    Strategy:
+    1. Exclude ETF codes (51/52/56/58/15/16/18)
+    2. Exclude stock codes (00/30/60/68/92/43/83/87/88)
+    3. Recognize common fund prefixes (10/11/16/17/20/21/40/41/50/53/54/55/57/59)
+    4. Fall back to API verification for ambiguous codes
+
+    Args:
+        stock_code: Stock/fund code
+
+    Returns:
+        True if open-ended fund, False otherwise
+    """
+    code = stock_code.strip().split('.')[0]
+
+    # Must be 6-digit numeric
+    if len(code) != 6 or not code.isdigit():
+        return False
+
+    # Exclude ETF codes
+    if _is_etf_code(code):
+        return False
+
+    # Exclude stock prefixes
+    stock_prefixes = ('00', '30', '60', '68', '92', '43', '83', '87', '88')
+    if code.startswith(stock_prefixes):
+        return False
+
+    # Common fund prefixes (high confidence)
+    fund_prefixes = ('10', '11', '16', '17', '20', '21', '40', '41', '50', '53', '54', '55', '57', '59')
+    if code.startswith(fund_prefixes):
+        return True
+
+    # Ambiguous codes: verify with API
+    return _verify_fund_code_with_cache(code)
+
+
+def get_asset_type(stock_code: str) -> str:
+    """
+    Determine the asset type of a stock code.
+
+    Returns:
+        'fund' - Open-ended fund
+        'etf' - ETF fund
+        'hk_stock' - Hong Kong stock
+        'us_stock' - US stock
+        'us_index' - US index
+        'stock' - A-share stock (default)
+    """
+    code = stock_code.strip()
+
+    # Check in order of specificity
+    if _is_us_code(code):
+        if is_us_index_code(code):
+            return 'us_index'
+        return 'us_stock'
+    elif _is_hk_code(code):
+        return 'hk_stock'
+    elif _is_etf_code(code):
+        return 'etf'
+    elif _is_open_fund_code(code):
+        return 'fund'
+    else:
+        return 'stock'
 
 
 def _to_sina_tx_symbol(stock_code: str) -> str:
@@ -350,6 +470,8 @@ class AkshareFetcher(BaseFetcher):
             return self._fetch_hk_data(stock_code, start_date, end_date)
         elif _is_etf_code(stock_code):
             return self._fetch_etf_data(stock_code, start_date, end_date)
+        elif _is_open_fund_code(stock_code):
+            return self._fetch_fund_data(stock_code, start_date, end_date)
         else:
             return self._fetch_stock_data(stock_code, start_date, end_date)
     
@@ -578,7 +700,65 @@ class AkshareFetcher(BaseFetcher):
                 raise RateLimitError(f"Akshare 可能被限流: {e}") from e
             
             raise DataFetchError(f"Akshare 获取 ETF 数据失败: {e}") from e
-    
+
+    def _fetch_fund_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        获取开放式基金历史净值数据
+
+        数据来源：ak.fund_open_fund_daily_em()
+
+        Args:
+            stock_code: 基金代码，如 '110022', '163402', '161725'
+            start_date: 开始日期，格式 'YYYY-MM-DD'
+            end_date: 结束日期，格式 'YYYY-MM-DD'
+
+        Returns:
+            基金净值数据 DataFrame
+        """
+        import akshare as ak
+
+        # 防封禁策略 1: 随机 User-Agent
+        self._set_random_user_agent()
+
+        # 防封禁策略 2: 强制休眠
+        self._enforce_rate_limit()
+
+        logger.info(f"[API调用] ak.fund_open_fund_daily_em(fund={stock_code})")
+
+        try:
+            import time as _time
+            api_start = _time.time()
+
+            # 调用 akshare 获取开放式基金日线净值数据
+            df = ak.fund_open_fund_daily_em(fund=stock_code)
+
+            api_elapsed = _time.time() - api_start
+
+            # 记录返回数据摘要
+            if df is not None and not df.empty:
+                logger.info(f"[API返回] ak.fund_open_fund_daily_em 成功: 返回 {len(df)} 行数据, 耗时 {api_elapsed:.2f}s")
+                logger.info(f"[API返回] 列名: {list(df.columns)}")
+
+                # Filter by date range
+                if '净值日期' in df.columns:
+                    df['净值日期'] = pd.to_datetime(df['净值日期'])
+                    df = df[(df['净值日期'] >= start_date) & (df['净值日期'] <= end_date)]
+                    logger.info(f"[API返回] 日期过滤后: {len(df)} 行, 范围: {df['净值日期'].min()} ~ {df['净值日期'].max()}")
+            else:
+                logger.warning(f"[API返回] ak.fund_open_fund_daily_em 返回空数据, 耗时 {api_elapsed:.2f}s")
+
+            return df
+
+        except Exception as e:
+            error_msg = str(e).lower()
+
+            # 检测反爬封禁
+            if any(keyword in error_msg for keyword in ['banned', 'blocked', '频率', 'rate', '限制']):
+                logger.warning(f"检测到可能被封禁: {e}")
+                raise RateLimitError(f"Akshare 可能被限流: {e}") from e
+
+            raise DataFetchError(f"Akshare 获取基金数据失败: {e}") from e
+
     def _fetch_us_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         获取美股历史数据
@@ -741,38 +921,62 @@ class AkshareFetcher(BaseFetcher):
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         """
         标准化 Akshare 数据
-        
-        Akshare 返回的列名（中文）：
-        日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
-        
+
+        处理两种数据格式：
+        1. 股票/ETF：日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
+        2. 基金净值：净值日期, 单位净值, 累计净值, 日增长率
+
         需要映射到标准列名：
         date, open, high, low, close, volume, amount, pct_chg
         """
         df = df.copy()
-        
-        # 列名映射（Akshare 中文列名 -> 标准英文列名）
-        column_mapping = {
-            '日期': 'date',
-            '开盘': 'open',
-            '收盘': 'close',
-            '最高': 'high',
-            '最低': 'low',
-            '成交量': 'volume',
-            '成交额': 'amount',
-            '涨跌幅': 'pct_chg',
-        }
-        
-        # 重命名列
-        df = df.rename(columns=column_mapping)
-        
+
+        # 检测是否为基金数据
+        is_fund_data = '净值日期' in df.columns and '单位净值' in df.columns
+
+        if is_fund_data:
+            # 基金净值数据映射
+            column_mapping = {
+                '净值日期': 'date',
+                '单位净值': 'close',
+                '累计净值': 'accumulated_nav',
+                '日增长率': 'pct_chg',
+            }
+            df = df.rename(columns=column_mapping)
+
+            # 基金没有真正的开盘/收盘/最高/最低，使用净值填充
+            # 基金没有成交量/成交额
+            df['open'] = df['close']
+            df['high'] = df['close']
+            df['low'] = df['close']
+            df['volume'] = 0
+            df['amount'] = 0
+
+            # 确保 pct_chg 是数值类型
+            if 'pct_chg' in df.columns:
+                df['pct_chg'] = pd.to_numeric(df['pct_chg'], errors='coerce')
+        else:
+            # 股票/ETF 数据映射
+            column_mapping = {
+                '日期': 'date',
+                '开盘': 'open',
+                '收盘': 'close',
+                '最高': 'high',
+                '最低': 'low',
+                '成交量': 'volume',
+                '成交额': 'amount',
+                '涨跌幅': 'pct_chg',
+            }
+            df = df.rename(columns=column_mapping)
+
         # 添加股票代码列
         df['code'] = stock_code
-        
+
         # 只保留需要的列
         keep_cols = ['code'] + STANDARD_COLUMNS
         existing_cols = [col for col in keep_cols if col in df.columns]
         df = df[existing_cols]
-        
+
         return df
     
     def get_realtime_quote(self, stock_code: str, source: str = "em") -> Optional[UnifiedRealtimeQuote]:
